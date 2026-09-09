@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.7] - 2026-09-09
+
+### Fixed — arm64 `.deb` missing from every release
+
+- Added the `linux-arm64-cross` CMake preset (configure + build), aligned on the
+  vendored toolchain `third_party/morf/morfdeploy/cmake/linux-aarch64.cmake` and
+  the QEMU sysroot (`MORF_SYSROOT`), exactly as ComponentHub already declares it.
+  Without this preset, `publish-releases --with-arm64-cross` on an x86_64 WSL host
+  had nothing to cross-build, so no arm64 binary was produced and every release
+  shipped without its `lanatlas-<version>-linux-arm64.deb`. The `linux-arm64-deb`
+  target was declared in 0.7.5, but its cross preset was never added; this closes
+  that gap. The rest was already at parity (the `package-deb.sh` build search
+  covers `build-arm64-cross`, vendored morfdeploy 0.20.6, same toolchain).
+
 ## [0.7.6] - 2026-09-09
 
 ### Fixed

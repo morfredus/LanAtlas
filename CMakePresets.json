@@ -17,11 +17,24 @@
     },
     {
       "name": "linux-arm64",
-      "displayName": "LanAtlas (Linux ARM64 native)",
+      "displayName": "LanAtlas (Linux ARM64 natif, ex. Raspberry Pi)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-arm64",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-arm64-cross",
+      "displayName": "LanAtlas (Linux ARM64 croisé, depuis x86_64)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-arm64-cross",
+      "toolchainFile": "${sourceDir}/third_party/morf/morfdeploy/cmake/linux-aarch64.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "environment": {
+        "QEMU_LD_PREFIX": "$penv{MORF_SYSROOT}"
       }
     },
     {
@@ -40,6 +53,13 @@
   "buildPresets": [
     { "name": "linux", "configurePreset": "linux" },
     { "name": "linux-arm64", "configurePreset": "linux-arm64" },
+    {
+      "name": "linux-arm64-cross",
+      "configurePreset": "linux-arm64-cross",
+      "environment": {
+        "QEMU_LD_PREFIX": "$penv{MORF_SYSROOT}"
+      }
+    },
     { "name": "mingw", "configurePreset": "mingw" }
   ]
 }
