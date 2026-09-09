@@ -1,29 +1,176 @@
 #!/usr/bin/env bash
+#
+# LanAtlas — construction d'un paquet Debian (.deb).
+#
+# Produit dist/lanatlas_<version>_<arch>.deb, installable via
+#   sudo apt install ./lanatlas_<version>_<arch>.deb
+# Le binaire est lié dynamiquement au Qt du système : le paquet DÉCLARE ses
+# dépendances (Qt6…) pour qu'apt les installe automatiquement.
+#
+# À utiliser sur Debian / Ubuntu / Raspberry Pi OS, après une compilation
+# NATIVE sur la même famille de distribution :
+#   cmake --preset linux        (x86_64)   ->  build/LanAtlas
+#   cmake --preset linux-arm64  (ARM64)    ->  build-arm64/LanAtlas
+#
+# Usage :
+#   scripts/linux/package-deb.sh [--build <dossier>] [--maintainer "Nom <email>"] [--depends "pkg, …"]
+#
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-VERSION="$(head -n1 "$ROOT/VERSION" | tr -d '[:space:]')"
-BINARY=""
-for dir in "$ROOT/build" "$ROOT/build-mingw"; do
-  if [ -x "$dir/LanAtlas" ]; then BINARY="$dir/LanAtlas"; break; fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+APP_NAME="LanAtlas"   # nom du binaire compilé
+CMD="lanatlas"        # nom du paquet / commande / .desktop / icône
+BUILD_DIR=""
+MAINTAINER="${DEB_MAINTAINER:-morfredus <morfredus@users.noreply.github.com>}"
+DEPENDS_OVERRIDE=""
+
+BUILD_CANDIDATES=("$ROOT/build" "$ROOT/build-arm64" "$ROOT/build-arm64-cross")
+
+die() { printf 'Erreur : %s\n' "$1" >&2; exit 1; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --build)      BUILD_DIR="${2:-}"; shift ;;
+        --maintainer) MAINTAINER="${2:-}"; shift ;;
+        --depends)    DEPENDS_OVERRIDE="${2:-}"; shift ;;
+        -h|--help)
+            cat <<'EOF'
+LanAtlas — construction d'un paquet Debian (.deb).
+Usage : scripts/linux/package-deb.sh [options]
+  --build <dossier>            Dossier de compilation (défaut : auto — build/ puis build-arm64/)
+  --maintainer "Nom <email>"   Champ Maintainer du paquet
+  --depends "pkg, pkg…"        Force les dépendances (sinon détection auto)
+  -h, --help                   Affiche cette aide
+EOF
+            exit 0 ;;
+        *) die "option inconnue : $1 (voir --help)" ;;
+    esac
+    shift
 done
-[ -n "$BINARY" ] || { echo "compiler d'abord (cmake --preset linux)"; exit 1; }
-ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
-STAGE="$(mktemp -d)"
-trap 'rm -rf "$STAGE"' EXIT
-PKG="$STAGE/lanatlas_${VERSION}_${ARCH}"
-mkdir -p "$PKG/usr/bin" "$PKG/usr/share/doc/lanatlas" "$PKG/DEBIAN"
-cp "$BINARY" "$PKG/usr/bin/lanatlas"
-cp "$ROOT/README.md" "$ROOT/README.fr.md" "$ROOT/CHANGELOG.md" "$ROOT/LICENSE" "$PKG/usr/share/doc/lanatlas/" 2>/dev/null || true
-cat > "$PKG/DEBIAN/control" <<EOF
-Package: lanatlas
+
+[ "$(uname -s)" = "Linux" ] || die "ce script doit être exécuté sous Linux."
+command -v dpkg-deb >/dev/null 2>&1 || die "dpkg-deb introuvable (paquet 'dpkg')."
+
+if [ -n "$BUILD_DIR" ]; then
+    BINARY="$BUILD_DIR/$APP_NAME"
+    [ -x "$BINARY" ] || die "binaire introuvable : $BINARY (compile d'abord, ou --build <dossier>)"
+else
+    for dir in "${BUILD_CANDIDATES[@]}"; do
+        if [ -x "$dir/$APP_NAME" ]; then BUILD_DIR="$dir"; BINARY="$dir/$APP_NAME"; break; fi
+    done
+    [ -n "${BINARY:-}" ] || die \
+"binaire introuvable dans : ${BUILD_CANDIDATES[*]}
+  Compile d'abord :  cmake --preset linux && cmake --build --preset linux"
+fi
+echo "Binaire : $BINARY"
+
+VERSION="$(head -n1 "$ROOT/VERSION" | tr -d '[:space:]')"
+[ -n "$VERSION" ] || die "fichier VERSION vide ou absent."
+
+ARCH="$(dpkg --print-architecture)"
+ICON_SRC="$ROOT/resources/lanatlas-512.png"
+[ -f "$ICON_SRC" ] || die "icône introuvable : $ICON_SRC"
+
+detect_depends() {
+    ldd "$BINARY" 2>/dev/null | awk '/=> \//{print $3}' | sort -u \
+        | while read -r lib; do dpkg -S "$lib" 2>/dev/null | cut -d: -f1; done \
+        | sort -u | paste -sd, - | sed 's/,/, /g'
+}
+
+if [ -n "$DEPENDS_OVERRIDE" ]; then
+    DEPENDS="$DEPENDS_OVERRIDE"
+else
+    DEPENDS="$(detect_depends || true)"
+    [ -n "$DEPENDS" ] || DEPENDS="libc6, libqt6core6, libqt6gui6, libqt6widgets6, libqt6network6"
+    # Le plugin xcb (chargé par dlopen) exige libxcb-cursor0 depuis Qt 6.5.
+    case ", $DEPENDS," in
+        *", libxcb-cursor0,"*) : ;;
+        *) DEPENDS="$DEPENDS, libxcb-cursor0" ;;
+    esac
+fi
+
+# Preparer l'arborescence du paquet dans le systeme de fichiers NATIF (ext4 sous
+# WSL, ou le disque du Pi), JAMAIS sur /mnt/c : DrvFs force le mode 777 sur les
+# fichiers du lecteur Windows et y ignore chmod, or dpkg-deb refuse un dossier de
+# controle DEBIAN/ en 777 (il exige <= 0775). Seul le .deb final ira dans dist/.
+STAGE_ROOT="$(mktemp -d)"
+trap 'rm -rf "$STAGE_ROOT"' EXIT
+PKGDIR="$STAGE_ROOT/${CMD}_${VERSION}_${ARCH}"
+install -Dm755 "$BINARY" "$PKGDIR/usr/bin/$CMD"
+
+# Table OUI embarquee : la copier a cote pour que l'app la trouve installee.
+[ -f "$ROOT/data/oui.json" ] && install -Dm644 "$ROOT/data/oui.json" \
+    "$PKGDIR/usr/share/$CMD/oui.json"
+
+# La redirection `>` ne crée pas les dossiers parents : on prépare le dossier
+# des raccourcis .desktop avant d'y écrire (sans quoi « No such file or directory »).
+install -d "$PKGDIR/usr/share/applications"
+sed "s|^Exec=.*|Exec=/usr/bin/$CMD|" "$SCRIPT_DIR/$CMD.desktop" \
+    > "$PKGDIR/usr/share/applications/$CMD.desktop"
+chmod 644 "$PKGDIR/usr/share/applications/$CMD.desktop"
+
+if command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1; then
+    CONVERT="convert"; command -v magick >/dev/null 2>&1 && CONVERT="magick"
+    for size in 16 24 32 48 64 128 256; do
+        dest="$PKGDIR/usr/share/icons/hicolor/${size}x${size}/apps/$CMD.png"
+        mkdir -p "$(dirname "$dest")"
+        "$CONVERT" "$ICON_SRC" -resize "${size}x${size}" "$dest"
+    done
+else
+    install -Dm644 "$ICON_SRC" "$PKGDIR/usr/share/icons/hicolor/256x256/apps/$CMD.png"
+fi
+
+install -d "$PKGDIR/usr/share/doc/$CMD"
+cat > "$PKGDIR/usr/share/doc/$CMD/copyright" <<EOF
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: LanAtlas
+Source: https://morfredus.fr
+
+Files: *
+Copyright: 2026 morfredus
+License: GPL-3.0-only
+ This program is free software: you can redistribute it and/or modify it under
+ the terms of the GNU General Public License, version 3.
+ .
+ On Debian systems, the full text is in /usr/share/common-licenses/GPL-3.
+EOF
+printf '%s (%s) unstable; urgency=low\n\n  * LanAtlas %s.\n\n -- %s  %s\n' \
+    "$CMD" "$VERSION" "$VERSION" "$MAINTAINER" "$(date -R)" \
+    | gzip -9n > "$PKGDIR/usr/share/doc/$CMD/changelog.Debian.gz"
+
+INSTALLED_KB="$(du -sk "$PKGDIR" | cut -f1)"
+
+install -d "$PKGDIR/DEBIAN"
+cat > "$PKGDIR/DEBIAN/control" <<EOF
+Package: $CMD
 Version: $VERSION
+Architecture: $ARCH
+Maintainer: $MAINTAINER
+Installed-Size: $INSTALLED_KB
+Depends: $DEPENDS
 Section: net
 Priority: optional
-Architecture: $ARCH
-Maintainer: morfredus <morfredus@users.noreply.github.com>
-Depends: libqt6widgets6, libqt6network6
-Description: Cartographie du reseau local (Livebox + mesh Deco)
+Homepage: https://morfredus.fr
+Description: Home LAN map and connected-device control
+ LanAtlas maps the home LAN - the Orange Livebox, TP-Link Deco mesh nodes and
+ every host hanging off them - and controls the compatible smart devices it
+ discovers (a Tuya LED strip today: power, brightness, colour).
+ .
+ Cross-platform Qt/C++ desktop application (Windows, Linux, Raspberry Pi).
+ Standalone, part of the morfSystem ecosystem but with no dependency on it.
 EOF
-mkdir -p "$ROOT/dist"
-dpkg-deb --build "$PKG" "$ROOT/dist/lanatlas_${VERSION}_${ARCH}.deb"
-echo "OK $ROOT/dist/lanatlas_${VERSION}_${ARCH}.deb"
+
+OUT="$ROOT/dist/${CMD}_${VERSION}_${ARCH}.deb"
+install -d "$ROOT/dist"   # le staging n'est plus sous dist/ : creer la cible du .deb
+if dpkg-deb --help 2>&1 | grep -q -- '--root-owner-group'; then
+    dpkg-deb --build --root-owner-group "$PKGDIR" "$OUT"
+else
+    dpkg-deb --build "$PKGDIR" "$OUT"
+fi
+
+SIZE="$(du -h "$OUT" | cut -f1)"
+echo "OK — $OUT ($SIZE, $ARCH)"
+echo "Dépendances : $DEPENDS"
+echo "Installation :  sudo apt install \"$OUT\""
