@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=LanAtlas
+GenericName=Cartographie du réseau local
+GenericName[en]=Home network map
+Comment=Cartographie du réseau local (Livebox, mesh Deco) et pilotage des appareils connectés
+Comment[en]=Maps the home LAN (Livebox, Deco mesh) and controls connected devices
+Exec=lanatlas
+Icon=lanatlas
+Terminal=false
+Categories=Network;System;Utility;
+Keywords=reseau;lan;livebox;deco;tuya;cartographie;network;scanner;
+StartupNotify=true
+StartupWMClass=LanAtlas

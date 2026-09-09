@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.5] - 2026-09-09
+
+### Changed — full release-packaging parity with the parc apps
+
+- LanAtlas now declares the same binary target set as the other desktop apps
+  (ComponentHub, PhotoHub...): `linux-amd64-deb`, `linux-arm64-deb`,
+  `linux-amd64-appimage`, `windows-x86_64-zip`. The parc release chain
+  (`package-all.py`) builds each on its native machine, so a published release is
+  complete on every platform.
+- Rewrote `scripts/linux/package-deb.sh` on the parc reference: it now searches
+  `build-arm64/`, installs a `.desktop` entry and hicolor icons, auto-detects the
+  Qt runtime dependencies (plus `libxcb-cursor0`), and bundles `data/oui.json`
+  next to the binary so vendor lookup works once installed. Added
+  `scripts/linux/package-appimage.sh` (linuxdeploy + Qt plugin) and
+  `scripts/linux/lanatlas.desktop`. No change to the application itself.
+
 ## [0.7.4] - 2026-09-09
 
 ### Changed — join the morfSystem work ecosystem
