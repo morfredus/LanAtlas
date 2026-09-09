@@ -1,0 +1,3 @@
+// Icone de l'executable Windows (barre des taches, explorateur).
+// L'ico multi-taille (16..256) est genere depuis resources/lanatlas.svg.
+IDI_ICON1 ICON "lanatlas.ico"

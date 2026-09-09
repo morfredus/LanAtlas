@@ -1,0 +1,6 @@
+{
+  "livebox_host": "192.168.1.1",
+  "livebox_user": "admin",
+  "deco_host": "",
+  "_comment": "Les mots de passe ne vivent pas ici. Ils sont saisis dans l'application (magasin utilisateur)."
+}

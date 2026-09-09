@@ -1,0 +1,741 @@
+"""morfdeploy package: turn a freshly built, PROVEN binary into an installable.
+
+The rules this module enforces come straight from the packaging contract:
+
+  - only NATIVE targets of the current os+arch are packaged (cross-compilation is
+    never assumed); an incompatible target is reported and skipped, never faked;
+  - by default the binary is (re)built from the target's preset, so a package is
+    never quietly made from a stale binary; `--no-build` reuses an existing one
+    but the provenance barrier still applies in full;
+  - the provenance barrier refuses anything it cannot prove: build-info.json must
+    exist and say dirty=false (true OR null is refused), its commit must equal the
+    current HEAD, its version must equal VERSION, and its platform/arch must be the
+    target's. A build failure is fatal -- there is never a fall-back to an old
+    binary;
+  - a .deb's Depends is the sorted, de-duplicated UNION of what dpkg-shlibdeps
+    reads from the actual binary and the explicit runtime packages; the two
+    origins are printed separately before the merge. Development (-dev) packages
+    never appear there.
+
+Building the deliverables needs the platform's own tools (dpkg-deb/dpkg-shlibdeps
+on Debian, windeployqt on Windows); this module orchestrates them, it does not
+reimplement them.
+"""
+
+from __future__ import annotations
+
+import json
+import platform
+import shutil
+import subprocess
+import zipfile
+import os
+import tempfile
+from pathlib import Path
+
+from .core import detect_preset, invoking_user, locate_binary
+from .manifest import Manifest
+from .provenance import BUILD_INFO_NAME, detect_platform_arch, write_build_info
+from . import morfproject
+
+
+class PackageError(RuntimeError):
+    """A packaging step could not proceed for a reason worth reporting as-is."""
+
+
+# --- Provenance barrier ------------------------------------------------------
+
+def _read_build_info(binary: Path) -> dict | None:
+    info = binary.parent / BUILD_INFO_NAME
+    if not info.is_file():
+        return None
+    try:
+        return json.loads(info.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _git_head(repo_root: Path) -> str | None:
+    try:
+        out = subprocess.run(["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+                             capture_output=True, text=True, check=False)
+        return out.stdout.strip() if out.returncode == 0 else None
+    except OSError:
+        return None
+
+
+def _read_version(repo_root: Path) -> str | None:
+    try:
+        lines = (repo_root / "VERSION").read_text(encoding="utf-8").splitlines()
+        return lines[0].strip() if lines else None
+    except OSError:
+        return None
+
+
+# --- Cross-compilation (opt-in) ----------------------------------------------
+#
+# Reproducible ARM64 packaging from an x86_64 host, using the linux-arm64-cross
+# preset (Debian Trixie sysroot + qemu for Qt's tools). Strictly opt-in: only when
+# a linux/arm64 target is packaged BY NAME on an x86_64 Linux host with MORF_SYSROOT
+# set. The native path (build on the matching platform) is untouched. The Pi build
+# (native arm64) stays the reference; this is the "verified cross toolchain" the
+# native guard already anticipated.
+
+def _is_cross_build(target) -> bool:
+    """True when `target` (linux/arm64) is being cross-built from this x86_64 host."""
+    if target.os != "linux" or target.arch != "arm64":
+        return False
+    if platform.system() == "Windows":
+        return False
+    if platform.machine().lower() in ("aarch64", "arm64"):
+        return False  # native on the Pi, not a cross build
+    return bool(os.environ.get("MORF_SYSROOT"))
+
+
+def _elf_arch(binary: Path) -> str:
+    """Actual architecture of an ELF binary, in the parc's names (x86_64/arm64)."""
+    tool = shutil.which("readelf")
+    if tool is None:
+        return ""
+    out = subprocess.run([tool, "-h", str(binary)], capture_output=True, text=True)
+    text = out.stdout
+    if "AArch64" in text:
+        return "arm64"
+    if "X86-64" in text or "Advanced Micro Devices X86-64" in text:
+        return "x86_64"
+    return ""
+
+
+def verify_provenance(binary: Path, target, repo_root: Path) -> dict:
+    """Refuse to package anything whose provenance cannot be fully proved."""
+    info = _read_build_info(binary)
+    if info is None:
+        raise PackageError(
+            f"no {BUILD_INFO_NAME} beside {binary.name}: provenance unknown, "
+            "refusing to package. Build it (drop --no-build) to stamp it.")
+    if info.get("dirty") is not False:
+        state = info.get("dirty")
+        raise PackageError(
+            f"build provenance is dirty={state!r}: the sources were modified (or "
+            "their state could not be proven). Refusing to package.")
+    head = _git_head(repo_root)
+    if head is not None and info.get("commit") != head:
+        raise PackageError(
+            f"build was made at commit {str(info.get('commit'))[:12]}, but HEAD is "
+            f"{head[:12]}: the binary does not match the current sources. Rebuild.")
+    version = _read_version(repo_root)
+    if version is not None and info.get("version") != version:
+        raise PackageError(
+            f"build version {info.get('version')!r} != VERSION {version!r}: rebuild.")
+    if _is_cross_build(target):
+        # A cross build's build-info records the HOST arch (provenance detects the
+        # running machine). The binary itself is the ground truth : check the ELF.
+        elf = _elf_arch(binary)
+        if elf and elf != target.arch:
+            raise PackageError(
+                f"cross build produced a {elf} binary, target is {target.arch}: "
+                "wrong build for this deliverable.")
+    elif info.get("platform") != target.os or info.get("architecture") != target.arch:
+        raise PackageError(
+            f"binary is {info.get('platform')}-{info.get('architecture')}, target "
+            f"is {target.os}-{target.arch}: wrong build for this deliverable.")
+    return info
+
+
+# --- Target selection --------------------------------------------------------
+
+def select_targets(project, target_name, cur_os, cur_arch):
+    """(selected, incompatible) among the morfdeploy-provider targets.
+
+    Selected are the NATIVE ones (or the one named, if native). Incompatible are
+    the other-platform morfdeploy targets, reported so nothing is silently missed.
+    Cross-compilation is never assumed: a named non-native target is refused.
+    """
+    md = project.morfdeploy_targets()
+    native = [t for t in md if t.os == cur_os and t.arch == cur_arch]
+    incompatible = [t for t in md if not (t.os == cur_os and t.arch == cur_arch)]
+    if target_name:
+        t = project.targets.get(target_name)
+        if t is None:
+            raise PackageError(f"unknown target '{target_name}'. "
+                               f"Declared: {', '.join(project.target_names()) or '(none)'}")
+        if t.provider != "morfdeploy":
+            raise PackageError(f"target '{target_name}' is not packaged by morfdeploy "
+                               f"(provider '{t.provider}').")
+        if not (t.os == cur_os and t.arch == cur_arch):
+            # Opt-in cross path: a named linux/arm64 target, on an x86_64 Linux host,
+            # with a verified cross toolchain (MORF_SYSROOT). Otherwise refused as before.
+            if _is_cross_build(t):
+                return [t], [x for x in incompatible if x is not t]
+            raise PackageError(
+                f"target '{target_name}' is {t.os}-{t.arch}, this machine is "
+                f"{cur_os}-{cur_arch}. Cross-compilation is not assumed; run it on "
+                "the matching platform, or set MORF_SYSROOT for the linux-arm64-cross "
+                "toolchain (see morfDeploy/scripts/build-arm64-sysroot.sh).")
+        return [t], incompatible
+    return native, incompatible
+
+
+# --- Build -------------------------------------------------------------------
+
+def build_preset(repo_root: Path, preset: str) -> None:
+    """Configure and build a preset, or stop. No fall-back on failure."""
+    overrides = []
+    if platform.system() == "Windows" and preset in ("mingw", "windows"):
+        # Packaging builds must receive the same portable toolchain discovery as
+        # ordinary service builds. Otherwise a preset sees Qt but misses OpenSSL
+        # and other libraries installed beside the detected MinGW compiler.
+        from .backends.windows import _mingw_toolchain_overrides
+        overrides = _mingw_toolchain_overrides()
+    for stage in (["cmake", "--preset", preset, *overrides],
+                  ["cmake", "--build", "--preset", preset]):
+        result = subprocess.run(stage, cwd=str(repo_root), check=False)
+        if result.returncode != 0:
+            raise PackageError(
+                f"{' '.join(stage)} failed ({result.returncode}); refusing to "
+                "package. No fall-back to an earlier binary.")
+
+
+# --- Debian runtime dependencies --------------------------------------------
+
+def declared_runtime_debs(manifest: Manifest) -> list:
+    """Explicit runtime packages declared for Debian, across dependencies.
+
+    Only what the linkage cannot reveal is declared here (a subprocess such as
+    exiftool, a plugin, a system tool). An optional dependency's runtime is kept
+    when its capability is part of this build -- and a declared runtime IS that
+    statement of intent. Required ones are always kept.
+    """
+    packages: list = []
+    for dep in manifest.system_dependencies:
+        packages += list(dep.runtime_packages("debian"))
+    return sorted(set(packages))
+
+
+def shlibdeps(binary: Path) -> list:
+    """ELF runtime dependencies read from the binary itself, via dpkg-shlibdeps.
+
+    Returns a list of Debian dependency clauses (e.g. 'libqt6core6 (>= 6.4)').
+    dpkg-shlibdeps needs a minimal debian/ context, provided in a temp tree. This is
+    the NATIVE path (host arch == target) ; a cross build resolves its Depends from
+    the sysroot's .shlibs instead (see cross_depends), because dpkg-shlibdeps cannot
+    strip a sysroot prefix when mapping a found library back to its package.
+    """
+    if shutil.which("dpkg-shlibdeps") is None:
+        raise PackageError("dpkg-shlibdeps not found: install 'dpkg-dev' to build a .deb.")
+    import tempfile
+    work = Path(tempfile.mkdtemp(prefix="morfpkg-shlibs-"))
+    try:
+        (work / "debian").mkdir()
+        (work / "debian" / "control").write_text(
+            "Source: probe\n\nPackage: probe\nArchitecture: any\nDescription: probe\n",
+            encoding="utf-8")
+        # -O prints "shlibs:Depends=..." to stdout instead of writing a substvars
+        # file; --ignore-missing-info keeps a private/bundled .so from aborting it.
+        cmd = ["dpkg-shlibdeps", "-O", "--ignore-missing-info", str(binary)]
+        result = subprocess.run(
+            cmd, cwd=str(work), capture_output=True, text=True, check=False)
+        line = result.stdout.strip()
+        if not line.startswith("shlibs:Depends="):
+            # Not fatal to the whole package: report and continue with an empty ELF
+            # set, so the explicit runtime deps still apply. The caller shows both.
+            return []
+        clauses = line.split("=", 1)[1].strip()
+        return [c.strip() for c in clauses.split(",") if c.strip()] if clauses else []
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _needed_sonames(binary: Path, objdump: str) -> list:
+    """The NEEDED sonames of an ELF, read with the given objdump (host or cross)."""
+    out = subprocess.run([objdump, "-p", str(binary)],
+                         capture_output=True, text=True, check=False)
+    sonames = []
+    for ln in out.stdout.splitlines():
+        parts = ln.split()
+        if len(parts) >= 2 and parts[0] == "NEEDED":
+            sonames.append(parts[1])
+    return sonames
+
+
+def _sysroot_shlibs_map(sysroot: Path) -> dict:
+    """soname -> Debian dependency clause, read from the sysroot's own .shlibs files.
+
+    A cross build cannot lean on dpkg-shlibdeps' file->package lookup : it finds the
+    library at <sysroot>/usr/lib/... but the package database records it at /usr/lib/...
+    (no sysroot prefix) and there is no --sysroot to strip it. The .shlibs files ARE
+    the soname->dependency mapping we need, and reading them directly sidesteps the
+    prefix problem entirely. Format of a line: `library major-version dependency...`,
+    so `libQt6Sql 6 libqt6sql6t64 (>= 6.4.2)` describes soname libQt6Sql.so.6. Lines
+    prefixed with a type (e.g. `udeb:`) are for other package flavours, skipped.
+    """
+    info = sysroot / "var" / "lib" / "dpkg" / "info"
+    mapping: dict = {}
+    if not info.is_dir():
+        return mapping
+    for shlibs in info.glob("*.shlibs"):
+        try:
+            for ln in shlibs.read_text(encoding="utf-8", errors="replace").splitlines():
+                ln = ln.strip()
+                if not ln or ln.startswith("#") or ":" in ln.split(" ", 1)[0]:
+                    continue  # comment, or a typed line like `udeb: ...`
+                parts = ln.split(None, 2)
+                if len(parts) < 3:
+                    continue
+                library, soversion, dependency = parts[0], parts[1], parts[2].strip()
+                mapping.setdefault(f"{library}.so.{soversion}", dependency)
+        except OSError:
+            continue
+    return mapping
+
+
+def cross_depends(binary: Path, sysroot: Path, objdump: str) -> list:
+    """Runtime Depends of a cross-built binary, resolved from the sysroot's .shlibs.
+
+    Reads the binary's NEEDED sonames (with the target objdump) and maps each to the
+    dependency clause its providing package declares in the sysroot. Sonames with no
+    shlibs entry (typically the dynamic loader ld-linux-*.so) get no dependency, just
+    as dpkg would not add one. Deterministic, and free of dpkg-shlibdeps' sysroot
+    path-matching limitation.
+    """
+    smap = _sysroot_shlibs_map(sysroot)
+    clauses = {}
+    unresolved = []
+    for soname in _needed_sonames(binary, objdump):
+        dep = smap.get(soname)
+        if dep:
+            clauses[_dep_name(dep)] = dep
+        elif not soname.startswith("ld-linux"):
+            unresolved.append(soname)
+    if unresolved:
+        # The loader aside, an unresolved soname means a library present in the
+        # sysroot without shlibs metadata : say so rather than dropping it silently.
+        print("  [WARN] no .shlibs entry in the sysroot for: "
+              + ", ".join(sorted(unresolved)))
+    return [clauses[n] for n in sorted(clauses)]
+
+
+def _dep_name(clause: str) -> str:
+    """The bare package name of a Depends clause ('libc6 (>= 2.34)' -> 'libc6')."""
+    return clause.split("(", 1)[0].strip()
+
+
+def merge_depends(elf: list, runtime: list) -> list:
+    """Sorted, de-duplicated union of ELF and explicit runtime dependencies.
+
+    A package named by both keeps its ELF clause (it carries the version bound).
+    """
+    by_name: dict = {}
+    for clause in elf:
+        by_name[_dep_name(clause)] = clause
+    for name in runtime:
+        by_name.setdefault(_dep_name(name), name)
+    return [by_name[n] for n in sorted(by_name)]
+
+
+# --- .deb --------------------------------------------------------------------
+
+def _substitute_unit(manifest: Manifest, run_user: str) -> str:
+    """The project's systemd unit, with its placeholders resolved for a package."""
+    from .backends.systemd import UNIT_DIR  # noqa: F401  (import guard on Linux)
+    import re
+    candidates = [
+        manifest.repo_root / "scripts" / "linux" / f"{manifest.service_name}.service",
+        manifest.repo_root / "deploy" / f"{manifest.service_name}.service",
+    ]
+    template = next((p for p in candidates if p.is_file()), None)
+    if template is None:
+        raise PackageError(
+            f"no systemd unit template for {manifest.service_name} "
+            f"(looked in scripts/linux/ and deploy/).")
+    unit = template.read_text(encoding="utf-8")
+    home = Path("/home") / run_user if run_user != "root" else Path("/root")
+    for token, value in (
+        ("__RUN_USER__", run_user),
+        ("__APP_DIR__", f"/opt/{manifest.service_name}"),
+        ("__CONFIG_DIR__", str(manifest.config_dir())),
+        ("__STATE_DIR__", str(manifest.state_dir())),
+        ("__RUN_HOME__", str(home)),
+    ):
+        unit = unit.replace(token, value)
+    leftover = sorted(set(re.findall(r"__[A-Z][A-Z0-9_]*__", unit)))
+    if leftover:
+        raise PackageError(
+            f"unit template uses placeholders not resolved for packaging: "
+            f"{', '.join(leftover)}")
+    return unit
+
+
+def build_deb(manifest: Manifest, binary: Path, target, out_dir: Path) -> Path:
+    """Assemble and build a .deb from the proven binary. Debian only."""
+    if shutil.which("dpkg-deb") is None:
+        raise PackageError("dpkg-deb not found: install 'dpkg-dev' to build a .deb.")
+    import tempfile
+    svc = manifest.service_name
+    version = _read_version(manifest.repo_root) or "0.0.0"
+    arch = target.package.get("architecture") or "amd64"
+    run_user = svc  # a dedicated system user, created by the maintainer script
+
+    # --- Depends: ELF (from the binary) + explicit runtime, shown then merged ---
+    # Cross build : dpkg-shlibdeps cannot map a library found under <sysroot>/usr/lib
+    # to a package recorded at /usr/lib (no --sysroot to strip the prefix), so the
+    # sonames are resolved directly from the sysroot's .shlibs files instead. Native
+    # keeps the standard dpkg-shlibdeps path unchanged.
+    cross_sysroot = None
+    if _is_cross_build(target):
+        sysroot = os.environ.get("MORF_SYSROOT")
+        if sysroot:
+            cross_sysroot = Path(sysroot)
+            triplet = {"arm64": "aarch64-linux-gnu"}.get(target.arch, "")
+            # L'objdump de la cible : le binutils hote (x86_64) ne sait pas lire un
+            # ELF arm64, il faut celui de la cible pour lire les NEEDED.
+            prefix = os.environ.get("MORF_CROSS_PREFIX", f"{triplet}-" if triplet else "")
+            objdump = f"{prefix}objdump"
+            if not shutil.which(objdump):
+                print(f"  [WARN] {objdump} introuvable : impossible de lire les "
+                      "dependances du binaire arm64. Installe binutils-aarch64-linux-gnu "
+                      "(ou crossbuild-essential-arm64).")
+                elf = []
+            else:
+                elf = cross_depends(binary, cross_sysroot, objdump)
+        else:
+            elf = []  # cross sans sysroot : deja refuse en amont, garde-fou
+    else:
+        elf = shlibdeps(binary)
+    runtime = declared_runtime_debs(manifest)
+    label = ("from the sysroot .shlibs (cross)" if cross_sysroot
+             else "from dpkg-shlibdeps (linked libraries)")
+    print(f"  Depends -- {label}:")
+    for c in elf:
+        print(f"      {c}")
+    print("  Depends -- explicit runtime (declared, not linkage-visible):")
+    for c in (runtime or ["(none)"]):
+        print(f"      {c}")
+    depends = merge_depends(elf, runtime)
+    print(f"  Depends -- merged: {', '.join(depends) or '(none)'}")
+
+    stage = Path(tempfile.mkdtemp(prefix=f"morfpkg-{svc}-"))
+    try:
+        # Layout
+        opt = stage / "opt" / svc
+        opt.mkdir(parents=True)
+        shutil.copy2(binary, opt / manifest.binary_name())
+        (opt / manifest.binary_name()).chmod(0o755)
+        # Fichier VERSION a cote du binaire : un service sans beacon (morfUpdate)
+        # reste lisible par morfMonitor si /status ne repond pas encore.
+        version_file = manifest.repo_root / "VERSION"
+        if version_file.is_file():
+            shutil.copy2(version_file, opt / "VERSION")
+
+        # A privileged helper is an explicit, opt-in package fact. It never
+        # shares the application directory: the service account must not be
+        # able to replace a root executable during a normal update.
+        helper_path = None
+        if manifest.helper_binary:
+            candidates = (
+                manifest.repo_root / "build" / "service" / manifest.helper_binary,
+                manifest.repo_root / "build-arm64" / "service" / manifest.helper_binary,
+                manifest.repo_root / "build-arm64-cross" / "service" / manifest.helper_binary,
+            )
+            helper_path = next((candidate for candidate in candidates if candidate.is_file()), None)
+            if helper_path is None:
+                raise PackageError(f"privileged helper not built: {manifest.helper_binary}")
+            helper_dir = stage / "usr" / "lib" / "morfsystem" / svc
+            helper_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(helper_path, helper_dir / manifest.helper_binary)
+            (helper_dir / manifest.helper_binary).chmod(0o4750)
+
+        conffiles = []
+        restricted_configs = []
+        etc = Path(str(manifest.config_dir()).lstrip("/"))
+        for config in manifest.configs:
+            src = manifest.repo_root / config.source
+            if config.source.endswith(".example.json"):
+                real = Path(str(src).replace(".example.json", ".json"))
+                if real.is_file():
+                    src = real
+            if not src.is_file():
+                continue
+            dest_abs = config.resolved_dest(manifest.config_dir())
+            dest = stage / str(dest_abs).lstrip("/")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            # Mode deterministe (defaut 0644) plutot que celui herite du checkout
+            # git : sinon un meme paquet pose un mode different selon la machine,
+            # le umask ou la maniere dont le fichier a ete genere.
+            mode = int(config.mode, 8)
+            dest.chmod(mode)
+            abs_path = "/" + str(dest.relative_to(stage)).replace("\\", "/")
+            conffiles.append(abs_path)
+            # Un mode sans lecture « autre » (ex. secret en 0640) suppose que le
+            # service lit par son groupe. dpkg pose tout en root:root ; le postinst
+            # redonne alors le fichier au groupe du service, sinon un 0640 serait
+            # illisible pour son compte non-root.
+            if not (mode & 0o004):
+                restricted_configs.append((abs_path, config.mode))
+
+        # Persistent state directory (owned by the run user via postinst).
+        (stage / str(manifest.state_dir()).lstrip("/")).mkdir(parents=True, exist_ok=True)
+
+        # systemd unit
+        unit_dir = stage / "lib" / "systemd" / "system"
+        unit_dir.mkdir(parents=True)
+        (unit_dir / f"{svc}.service").write_text(_substitute_unit(manifest, run_user),
+                                                 encoding="utf-8")
+
+        # DEBIAN metadata
+        debian = stage / "DEBIAN"
+        debian.mkdir()
+        control = (
+            f"Package: {svc}\n"
+            f"Version: {version}\n"
+            f"Architecture: {arch}\n"
+            f"Maintainer: morfredus <noreply@morfredus.fr>\n"
+            + (f"Depends: {', '.join(depends)}\n" if depends else "")
+            + f"Section: net\nPriority: optional\n"
+            f"Description: {manifest.display_name} (morfSystem service)\n"
+            f" Packaged by morfdeploy from a provenance-checked binary.\n")
+        (debian / "control").write_text(control, encoding="utf-8")
+        if conffiles:
+            (debian / "conffiles").write_text("\n".join(conffiles) + "\n", encoding="utf-8")
+
+        # Maintainer scripts: a dedicated system user, then systemd wiring. Config
+        # files are conffiles, so dpkg preserves an edited one across upgrades.
+        # prerm : a l'upgrade, seulement stop (pas disable). disable --now laissait
+        # le service eteint si enable --now du postinst echouait (|| true), visible
+        # en mettant a jour morfMonitor depuis sa propre interface.
+        helper_postinst = ""
+        if manifest.helper_binary:
+            # Le binaire 4750 ne suffit pas : si le dossier reste root:root 750,
+            # le compte du service ne peut pas le parcourir et QProcess echoue
+            # « helper introuvable » alors que le fichier est la (cas vu avec
+            # morfphoto-helper apres un dpkg incomplet).
+            helper_dir = f"/usr/lib/morfsystem/{svc}"
+            helper_file = f"{helper_dir}/{manifest.helper_binary}"
+            helper_postinst = (
+                f"chown root:{run_user} {helper_dir} || true\n"
+                f"chmod 750 {helper_dir} || true\n"
+                f"chown root:{run_user} {helper_file} || true\n"
+                f"chmod 4750 {helper_file} || true\n")
+        # Configs a mode restrictif (secrets) : donnees au groupe du service.
+        config_postinst = ""
+        for abs_path, mode in restricted_configs:
+            config_postinst += (
+                f"chown root:{run_user} {abs_path} || true\n"
+                f"chmod {mode} {abs_path} || true\n")
+        postinst = (
+            "#!/bin/sh\nset -e\n"
+            f"if ! id -u {run_user} >/dev/null 2>&1; then\n"
+            f"  adduser --system --group --no-create-home --home /opt/{svc} {run_user} || true\n"
+            "fi\n"
+            f"chown -R {run_user}:{run_user} /opt/{svc} {manifest.state_dir()} || true\n") + helper_postinst + config_postinst + (
+            "if [ -d /run/systemd/system ]; then\n"
+            "  systemctl daemon-reload || true\n"
+            f"  systemctl enable --now {svc}.service || true\n"
+            "fi\nexit 0\n")
+        prerm = (
+            "#!/bin/sh\nset -e\n"
+            "if [ -d /run/systemd/system ]; then\n"
+            "  case \"$1\" in\n"
+            "    remove|deconfigure)\n"
+            f"      systemctl disable --now {svc}.service || true\n"
+            "      ;;\n"
+            "    *)\n"
+            f"      systemctl stop {svc}.service || true\n"
+            "      ;;\n"
+            "  esac\n"
+            "fi\nexit 0\n")
+        for name, body in (("postinst", postinst), ("prerm", prerm)):
+            p = debian / name
+            p.write_text(body, encoding="utf-8")
+            p.chmod(0o755)
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        deb = out_dir / f"{svc}-{version}-linux-{arch}.deb"
+        result = subprocess.run(
+            ["dpkg-deb", "--root-owner-group", "--build", str(stage), str(deb)],
+            capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise PackageError(f"dpkg-deb failed: {result.stderr.strip()}")
+        print(f"  built: {deb}")
+        return deb
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+# --- .zip (Windows) ----------------------------------------------------------
+
+def build_zip(manifest: Manifest, binary: Path, target, out_dir: Path) -> Path:
+    """Assemble and zip a portable Windows bundle from the proven binary."""
+    import tempfile
+    svc = manifest.service_name
+    version = _read_version(manifest.repo_root) or "0.0.0"
+    stage = Path(tempfile.mkdtemp(prefix=f"morfpkg-{svc}-"))
+    try:
+        appdir = stage / svc
+        appdir.mkdir()
+        installed = appdir / manifest.binary_name()
+        shutil.copy2(binary, installed)
+
+        # Bundle the Qt and compiler runtime beside the binary (windeployqt),
+        # exactly as an install does -- reused, not reimplemented.
+        from .backends.windows import WindowsBackend
+        WindowsBackend().install_runtime(installed, binary)
+
+        # A ready-to-edit configuration alongside.
+        for config in manifest.configs:
+            src = manifest.repo_root / config.source
+            if src.is_file():
+                shutil.copy2(src, appdir / Path(config.source).name)
+
+        # Register / remove the service on the target machine (scheduled task as
+        # SYSTEM -- the same strategy morfdeploy uses on Windows without a wrapper).
+        exe = f"%~dp0{manifest.binary_name()}"
+        (appdir / "install-service.ps1").write_text(
+            "# Register the morfSystem service (run as Administrator).\n"
+            "$ErrorActionPreference = 'Stop'\n"
+            f"$exe = Join-Path $PSScriptRoot '{manifest.binary_name()}'\n"
+            f"schtasks /Create /F /TN '{svc}' /TR \"$exe\" /SC ONSTART /RU SYSTEM\n"
+            f"schtasks /Run /TN '{svc}'\n"
+            f"Write-Host 'Service {svc} registered as a scheduled task (SYSTEM).'\n",
+            encoding="utf-8")
+        (appdir / "uninstall-service.ps1").write_text(
+            "# Remove the morfSystem service (run as Administrator).\n"
+            "$ErrorActionPreference = 'SilentlyContinue'\n"
+            f"schtasks /End /TN '{svc}'\n"
+            f"schtasks /Delete /F /TN '{svc}'\n"
+            f"Write-Host 'Service {svc} removed.'\n",
+            encoding="utf-8")
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = out_dir / f"{svc}-{version}-windows-x86_64.zip"
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for path in sorted(appdir.rglob("*")):
+                if path.is_file():
+                    zf.write(path, path.relative_to(stage))
+        print(f"  built: {zip_path}")
+        return zip_path
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+
+# --- Orchestration -----------------------------------------------------------
+
+_FORMAT_BUILDERS = {"deb": build_deb, "zip": build_zip}
+
+
+def _package_cross(manifest: Manifest, target, no_build: bool, out_dir: Path) -> list:
+    """Cross-build a linux/arm64 target from x86_64 and package it (opt-in).
+
+    Isolated from the native flow: builds the linux-arm64-cross preset, locates the
+    aarch64 binary in build-arm64-cross, proves it (via the ELF), and hands it to the
+    format builder. build_deb resolves Depends against the sysroot's dpkg database.
+    """
+    preset, build_dir = "linux-arm64-cross", "build-arm64-cross"
+    if not no_build:
+        print(f"Cross-building (preset {preset}) for {target.os}-{target.arch}...")
+        build_preset(manifest.repo_root, preset)
+    binary = locate_binary(manifest, build_dir)
+    if binary is None:
+        raise PackageError(
+            f"no binary under {manifest.repo_root / build_dir} after cross-building. "
+            "Is MORF_SYSROOT set and the sysroot built "
+            "(morfDeploy/scripts/build-arm64-sysroot.sh)?")
+    # Provenance a besoin du build-info.json (commit/dirty/version) ; seule l'arch
+    # vient de l'ELF pour un cross. On tamponne donc comme le flux natif, avec le
+    # meme repli si build-*/service/ a ete laisse root:root par un build privilegie.
+    pack_binary, stamp_tmp = binary, None
+    try:
+        write_build_info(manifest.repo_root, pack_binary,
+                         project=manifest.display_name)
+    except OSError:
+        stamp_tmp = tempfile.TemporaryDirectory(prefix="morfdeploy-stamp-")
+        pack_binary = Path(stamp_tmp.name) / binary.name
+        shutil.copy2(binary, pack_binary)
+        write_build_info(manifest.repo_root, pack_binary,
+                         project=manifest.display_name)
+        print(f"  cannot write build-info.json beside {binary}; "
+              f"provenance stamped in {stamp_tmp.name}")
+    try:
+        print(f"\nTarget {target.name} ({target.format}) [cross aarch64]:")
+        verify_provenance(pack_binary, target, manifest.repo_root)  # ELF-arch for cross
+        builder = _FORMAT_BUILDERS.get(target.format)
+        if builder is None:
+            raise PackageError(f"no builder for format '{target.format}'.")
+        return [builder(manifest, pack_binary, target, out_dir)]
+    finally:
+        if stamp_tmp is not None:
+            stamp_tmp.cleanup()
+
+
+def package(project, manifest: Manifest, target_name, no_build: bool,
+            out_dir: Path) -> list:
+    """Build the deliverable(s) for the current platform. Returns the paths made."""
+    cur_os, cur_arch = detect_platform_arch()
+    selected, incompatible = select_targets(project, target_name, cur_os, cur_arch)
+
+    if incompatible:
+        print(f"Skipping {len(incompatible)} target(s) not native to "
+              f"{cur_os}-{cur_arch} (no cross-compilation assumed):")
+        for t in incompatible:
+            print(f"  - {t.name} ({t.os}-{t.arch})")
+    if not selected:
+        print(f"No morfdeploy target native to {cur_os}-{cur_arch}: nothing to build.")
+        return []
+
+    # Opt-in cross path : a single named linux/arm64 target on an x86_64 host with a
+    # verified sysroot. Isolated so the native flow below stays exactly as it was.
+    if len(selected) == 1 and _is_cross_build(selected[0]):
+        return _package_cross(manifest, selected[0], no_build, out_dir)
+
+    _, build_dir = detect_preset()
+
+    if not no_build:
+        # Shared compilation: build each distinct preset ONCE, however many
+        # deliverables share it.
+        for preset in sorted({t.build_preset for t in selected if t.build_preset}):
+            print(f"Building (preset {preset})...")
+            build_preset(manifest.repo_root, preset)
+        binary = locate_binary(manifest, build_dir)
+        if binary is None:
+            raise PackageError(f"no binary under {manifest.repo_root / build_dir} "
+                               "after building.")
+        pack_binary = binary
+        stamp_tmp = None
+        # Un cmake/ninja lance en root laisse build-*/service/ en root:root :
+        # ninja n'a plus rien a faire, mais build-info.json est injouable
+        # (PermissionError). On tamponne alors une copie dans un dossier user.
+        try:
+            write_build_info(manifest.repo_root, pack_binary,
+                             project=manifest.display_name)
+        except OSError:
+            # Parent writable + build-info.json root:root : le test W_OK du
+            # dossier ne suffit pas. Tampon hors du build.
+            stamp_tmp = tempfile.TemporaryDirectory(prefix="morfdeploy-stamp-")
+            pack_binary = Path(stamp_tmp.name) / binary.name
+            shutil.copy2(binary, pack_binary)
+            write_build_info(manifest.repo_root, pack_binary,
+                             project=manifest.display_name)
+            print(f"  cannot write build-info.json beside {binary}; "
+                  f"provenance stamped in {stamp_tmp.name}")
+    else:
+        pack_binary = locate_binary(manifest, build_dir)
+        stamp_tmp = None
+        if pack_binary is None:
+            raise PackageError("no built binary and --no-build was given: build it "
+                               "first, or drop --no-build.")
+
+    made = []
+    try:
+        for t in selected:
+            print(f"\nTarget {t.name} ({t.format}):")
+            verify_provenance(pack_binary, t, manifest.repo_root)   # the barrier
+            builder = _FORMAT_BUILDERS.get(t.format)
+            if builder is None:
+                print(f"  no builder for format '{t.format}', skipped.")
+                continue
+            made.append(builder(manifest, pack_binary, t, out_dir))
+        return made
+    finally:
+        if stamp_tmp is not None:
+            stamp_tmp.cleanup()
