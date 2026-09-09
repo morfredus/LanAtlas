@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.8] - 2026-09-10
+
+### Fixed — arm64 `.deb` now cross-built from WSL, not only on the Pi
+
+- `package-deb.sh` now detects an aarch64 binary on a non-aarch64 host (a cross
+  build, `build-arm64-cross/`) and, in that case, labels the package `arm64` and
+  resolves its `Depends` from the sysroot's `.shlibs` (via the vendored morfdeploy
+  `cross_depends`) instead of the host's `dpkg`/`ldd`, which are blind to an arm64
+  ELF. Combined with the parc tooling fix (morfTools 0.35.12), `publish-releases
+  --with-arm64-cross` on an x86_64 WSL host now produces the full Linux set — amd64,
+  arm64 and AppImage — so the arm64 `.deb` no longer depends on a build on the Pi.
+  It uses the `linux-arm64-cross` preset added in 0.7.7.
+
 ## [0.7.7] - 2026-09-09
 
 ### Fixed — arm64 `.deb` missing from every release
