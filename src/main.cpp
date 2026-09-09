@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QIcon>
+#include <QPalette>
 #include <QStyleHints>
 #include <morfbeacon/PresenceService.h>
 #include <morfbeacon/IMetricsProvider.h>
@@ -18,7 +19,15 @@ int main(int argc, char* argv[])
     app.setApplicationVersion(QStringLiteral(LA_APP_VERSION));
     app.setWindowIcon(QIcon(QStringLiteral(":/lanatlas.png")));
 
+    // Detection du theme sombre. colorScheme() n'existe qu'a partir de Qt 6.5 ;
+    // le Qt systeme de Debian/WSL (6.4) ne l'a pas. On garde donc l'API recente
+    // derriere un test de version, avec un repli portable base sur la luminosite
+    // du fond de la palette.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     const bool dark = app.styleHints()->colorScheme() == Qt::ColorScheme::Dark;
+#else
+    const bool dark = app.palette().color(QPalette::Window).lightness() < 128;
+#endif
     app.setStyleSheet(Theme::stylesheet(dark));
 
     MainWindow window;

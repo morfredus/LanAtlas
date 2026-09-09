@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.6] - 2026-09-09
+
+### Fixed
+
+- **Build on Qt < 6.5** (the system Qt 6.4 of Debian / WSL / Raspberry Pi OS).
+  `main.cpp` detected the dark theme with `QStyleHints::colorScheme()` /
+  `Qt::ColorScheme`, both added in Qt 6.5, so the native Linux and arm64 builds
+  failed to compile (Windows, on Qt 6.9, was fine). The detection is now guarded
+  by a Qt version check with a portable fallback (window-colour lightness of the
+  palette). No behaviour change on Qt 6.5+.
+
 ## [0.7.5] - 2026-09-09
 
 ### Changed — full release-packaging parity with the parc apps
