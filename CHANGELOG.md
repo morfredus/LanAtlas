@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.11] - 2026-09-10
+
+### Changed
+
+- Resynced vendored morfUpdate to 0.8.0 (opt-in self-update, stage 2). No behaviour
+  change in this application: the affected code is the update agent, which desktop
+  apps do not run.
+
+## [0.7.10] - 2026-09-10
+
+### Changed
+
+- Resynced vendored morfUpdate to 0.7.0 (self-update state contract, stage 1, plus
+  a Windows journal-rewrite fix). No behaviour change in this application: the
+  affected code is the update agent, which desktop apps do not run.
+
 ## [0.7.9] - 2026-09-10
 
 ### Fixed — update dialog offered the checksums file instead of the binary
