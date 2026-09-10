@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.9] - 2026-09-10
+
+### Fixed — update dialog offered the checksums file instead of the binary
+
+- Resynced vendored morfUpdate to 0.6.0. The "Check for updates" dialog now picks
+  the release asset matching the running OS and CPU architecture (the Windows
+  `.zip`, the arch-matched Linux `.deb`/`.AppImage`) instead of the first asset,
+  which was often `checksums.sha256`. No API change.
+
 ## [0.7.8] - 2026-09-10
 
 ### Fixed — arm64 `.deb` now cross-built from WSL, not only on the Pi
