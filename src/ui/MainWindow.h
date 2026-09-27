@@ -57,8 +57,6 @@ private slots:
     void copyMac();
     void renameCurrent();
     void pingCurrent();
-    void webSearchCurrent();
-    void macLookupCurrent();
     void openHttpCurrent();
     void tableContextMenu(const QPoint& pos);
 

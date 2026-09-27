@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.7.14] - 2026-09-27
+
+### Changed
+
+- Re-vendored morfBeacon to 0.7.2 (documentation-only release; `include/` and
+  `src/` unchanged).
+- Re-vendored morfUpdate to 0.8.2 (vendoring-only release; `include/` and
+  `src/` unchanged).
+
+## [0.7.13] - 2026-09-27
+
+### Changed
+
+- Re-vendored morfDeploy to 0.20.7 (dead-code removal and punctuation only; no
+  behaviour change).
+
+## [0.7.12] - 2026-09-27
+
+### Removed
+
+- **Leftovers of the former web search.** `WebLookup::searchDevice`, `lookupMac`,
+  `lookupOui`, `searchPorts` (and their DuckDuckGo helper) had no caller since the
+  OUI enrichment replaced them, and the `webSearchCurrent` / `macLookupCurrent`
+  slots were unconnected aliases of `enrichCurrent`.
+
+### Changed
+
+- Re-vendored morfUpdate to 0.8.1 (documentation-only release; clears the
+  `morf doctor` vendored-copy drift).
+- Em dashes replaced by `-` in the project's own files.
+
 ## [0.7.11] - 2026-09-10
 
 ### Changed
@@ -18,7 +49,7 @@
 
 ## [0.7.9] - 2026-09-10
 
-### Fixed — update dialog offered the checksums file instead of the binary
+### Fixed - update dialog offered the checksums file instead of the binary
 
 - Resynced vendored morfUpdate to 0.6.0. The "Check for updates" dialog now picks
   the release asset matching the running OS and CPU architecture (the Windows
@@ -27,20 +58,20 @@
 
 ## [0.7.8] - 2026-09-10
 
-### Fixed — arm64 `.deb` now cross-built from WSL, not only on the Pi
+### Fixed - arm64 `.deb` now cross-built from WSL, not only on the Pi
 
 - `package-deb.sh` now detects an aarch64 binary on a non-aarch64 host (a cross
   build, `build-arm64-cross/`) and, in that case, labels the package `arm64` and
   resolves its `Depends` from the sysroot's `.shlibs` (via the vendored morfdeploy
   `cross_depends`) instead of the host's `dpkg`/`ldd`, which are blind to an arm64
   ELF. Combined with the parc tooling fix (morfTools 0.35.12), `publish-releases
-  --with-arm64-cross` on an x86_64 WSL host now produces the full Linux set — amd64,
-  arm64 and AppImage — so the arm64 `.deb` no longer depends on a build on the Pi.
+  --with-arm64-cross` on an x86_64 WSL host now produces the full Linux set - amd64,
+  arm64 and AppImage - so the arm64 `.deb` no longer depends on a build on the Pi.
   It uses the `linux-arm64-cross` preset added in 0.7.7.
 
 ## [0.7.7] - 2026-09-09
 
-### Fixed — arm64 `.deb` missing from every release
+### Fixed - arm64 `.deb` missing from every release
 
 - Added the `linux-arm64-cross` CMake preset (configure + build), aligned on the
   vendored toolchain `third_party/morf/morfdeploy/cmake/linux-aarch64.cmake` and
@@ -65,7 +96,7 @@
 
 ## [0.7.5] - 2026-09-09
 
-### Changed — full release-packaging parity with the parc apps
+### Changed - full release-packaging parity with the parc apps
 
 - LanAtlas now declares the same binary target set as the other desktop apps
   (ComponentHub, PhotoHub...): `linux-amd64-deb`, `linux-arm64-deb`,
@@ -81,7 +112,7 @@
 
 ## [0.7.4] - 2026-09-09
 
-### Changed — join the morfSystem work ecosystem
+### Changed - join the morfSystem work ecosystem
 
 - LanAtlas is now a declared **application** of the morfSystem ecosystem (in
   morfTools `ecosystem.json`): port 8883 reserved in the app range (8880-8899),
@@ -97,7 +128,7 @@
 
 ## [0.7.3] - 2026-09-09
 
-### Changed — settings as a plain file in the standard app folder
+### Changed - settings as a plain file in the standard app folder
 
 - Settings (Livebox/Deco credentials, scan options, Tuya local keys) are now an
   INI file in the same per-user app folder as the session state, instead of the
@@ -119,7 +150,7 @@
 
 ## [0.7.1] - 2026-09-09
 
-### Changed — editable local keys, no more dead end
+### Changed - editable local keys, no more dead end
 
 - Tuya local keys are now managed in **Settings > "Pilotage - local keys Tuya"**:
   one editable row per device (id + key), changeable or removable at any time.
@@ -130,7 +161,7 @@
 
 ## [0.7.0] - 2026-09-09
 
-### Added — control Tuya smart devices ("Piloter")
+### Added - control Tuya smart devices ("Piloter")
 
 - LanAtlas moves from map-only to **map + remote control**: a "Piloter" panel
   appears for a controllable device (Tuya today) next to its dossier.
@@ -153,7 +184,7 @@
 
 ## [0.6.0] - 2026-09-09
 
-### Added — Tuya smart devices on the map
+### Added - Tuya smart devices on the map
 
 - **Passive Tuya discovery**: a permanent listener binds UDP 6666 and 6667 and
   reads the periodic broadcast every Tuya device (bulbs, LED strips, plugs...)
@@ -173,12 +204,12 @@
 
 - This release only **identifies** Tuya devices. Controlling them (on/off,
   brightness, colour on TCP 6668) needs each device's per-device local key,
-  which is not on the LAN — it comes from the Tuya cloud. That "Piloter"
+  which is not on the LAN - it comes from the Tuya cloud. That "Piloter"
   feature lands in a following version.
 
 ## [0.5.0] - 2026-08-26
 
-### Added — detection plus precise
+### Added - detection plus precise
 
 - **Description UPnP/SSDP** : on suit le `LOCATION` et on lit le XML
   (`friendlyName`, `modelName`, `manufacturer`) - vrais noms des TV, box,
@@ -193,7 +224,7 @@
 - **Cache disque OUI -> fabricant** : plus de requete web repetee a chaque scan
   (`oui-cache.json`).
 
-### Added — experience utilisateur
+### Added - experience utilisateur
 
 - **Renommer** un appareil (nom personnalise persistant, `labels.json`) via le
   bouton, le menu contextuel ou double-clic.

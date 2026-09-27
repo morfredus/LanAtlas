@@ -1289,16 +1289,6 @@ void MainWindow::enrichCurrent()
     statusLabel_->setText(QStringLiteral("Interrogation des bases OUI (maclookup.app / macvendors.com)..."));
 }
 
-void MainWindow::webSearchCurrent()
-{
-    enrichCurrent();
-}
-
-void MainWindow::macLookupCurrent()
-{
-    enrichCurrent();
-}
-
 void MainWindow::openHttpCurrent()
 {
     const Device* d = currentDevice();
