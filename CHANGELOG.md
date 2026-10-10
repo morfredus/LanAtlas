@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.18] - 2026-10-10
+
+### Changed
+
+- Resync the vendored morfDeploy (0.21.2): `config push` skips identical files.
+- Resync the vendored morfUpdate (0.8.5).
+
+## [0.7.17] - 2026-10-10
+
+### Changed
+
+- Resync the vendored morfUpdate (0.8.4).
+
+## [0.7.16] - 2026-10-10
+
+### Changed
+
+- Resync the vendored morfDeploy (0.21.1): `install`/`update` now copy `VERSION` next to the binary.
+
 ## [0.7.15] - 2026-09-29
 
 ### Changed
