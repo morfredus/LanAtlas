@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.19] - 2026-10-10
+
+### Changed
+
+- Resync the vendored morfUpdate (0.8.6).
+
 ## [0.7.18] - 2026-10-10
 
 ### Changed
