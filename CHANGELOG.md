@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.20] - 2026-10-15
+
+### Changed
+
+- Resync the vendored morfBeacon (0.8.0): `/status` can now carry the generic `activity/1`
+  object (no behaviour change for this project).
+
 ## [0.7.19] - 2026-10-10
 
 ### Changed
