@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.7.22] - 2026-11-07
+
+### Fixed
+
+- Closing the window during a scan or a Tuya command no longer destroys a running `QThread`: a shared cancel flag is tested by the scan phases, the probes and the Tuya client (socket waits are sliced to 100 ms), and the destructors really wait for the worker threads.
+- `TuyaListener` table is capped (512 entries) with entries older than 5 minutes purged; the announce IP is the datagram source IP, not the one claimed in the JSON; frame lengths are read with `qFromBigEndian` (no signed shift).
+
+### Security
+
+- Tuya nonces/IVs, RSA padding and Deco random values use `QRandomGenerator::system()` instead of `global()`.
+- `settings.ini` (Tuya local keys, Livebox / Deco passwords) is restricted to 0600 on Unix. No keychain dependency, documented in the README.
+
+### Added
+
+- ctest target `la_test_pure` for the announce purge/cap.
+
+## [0.7.21] - 2026-11-07
+
+### Changed
+
+- Resync the vendored morfUpdate core to 0.9.0: loopback health URL parsed with `QUrl`, `Host` and `Origin` checks on the local API, downgrade refused unless explicitly allowed, subprocess timeouts and a minimal environment, archives with links refused. Update checks are unchanged.
+
 ## [0.7.20] - 2026-10-15
 
 ### Changed

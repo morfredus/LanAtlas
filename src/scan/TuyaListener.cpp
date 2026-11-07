@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QNetworkDatagram>
 #include <QUdpSocket>
+#include <QtEndian>
 
 namespace {
 
@@ -110,7 +111,7 @@ void TuyaListener::ingest(const QByteArray& dg, const QString& fromIp)
     bool encrypted = false;
 
     if (p[0] == 0x00 && p[1] == 0x00 && p[2] == 0x55 && p[3] == 0xaa) {
-        const int declared = (p[12] << 24) | (p[13] << 16) | (p[14] << 8) | p[15];
+        const int declared = int(qFromBigEndian<quint32>(p + 12));
         int payloadLen = declared - 8;   // la longueur couvre payload + crc + suffixe
         if (payloadLen <= 0 || 16 + payloadLen > dg.size())
             payloadLen = dg.size() - 16 - 8;  // repli tolerant
@@ -122,7 +123,7 @@ void TuyaListener::ingest(const QByteArray& dg, const QString& fromIp)
         }
     } else if (p[0] == 0x00 && p[1] == 0x00 && p[2] == 0x66 && p[3] == 0x99) {
         // entete : prefixe(4) inconnu(2) seq(4) commande(4) longueur(4) = 18 o.
-        const int length = (p[14] << 24) | (p[15] << 16) | (p[16] << 8) | p[17];
+        const int length = int(qFromBigEndian<quint32>(p + 14));
         if (length < 12 + 16 || 18 + length > dg.size())
             return;
         const QByteArray payload = dg.mid(18, length);
@@ -141,9 +142,9 @@ void TuyaListener::ingest(const QByteArray& dg, const QString& fromIp)
         return;
 
     TuyaAnnounce a;
-    a.ip = o.value(QStringLiteral("ip")).toString();
-    if (a.ip.isEmpty())
-        a.ip = fromIp;
+    // L'IP du JSON est declarative : seule l'IP source du datagramme fait foi, sinon
+    // un voisin pourrait usurper l'annonce d'un autre appareil.
+    a.ip = fromIp;
     a.deviceId = o.value(QStringLiteral("gwId")).toString(
         o.value(QStringLiteral("devId")).toString());
     a.productKey = o.value(QStringLiteral("productKey")).toString();
@@ -154,6 +155,7 @@ void TuyaListener::ingest(const QByteArray& dg, const QString& fromIp)
         return;
 
     byIp_.insert(a.ip, a);
+    pruneAnnounces(byIp_, a.lastSeen);
     emit changed();
 }
 

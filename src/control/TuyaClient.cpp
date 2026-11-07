@@ -7,7 +7,9 @@
 #include <QJsonDocument>
 #include <QDateTime>
 #include <QtEndian>
+#include <QElapsedTimer>
 #include <QRandomGenerator>
+#include "core/CancelFlag.h"
 
 namespace {
 
@@ -33,9 +35,45 @@ QByteArray hmacSha256(const QByteArray& key, const QByteArray& msg)
 QByteArray randomBytes(int n)
 {
     QByteArray b(n, 0);
-    QRandomGenerator::global()->fillRange(
+    // system() : source du systeme d'exploitation. global() est un PRNG deterministe
+    // qui n'a pas sa place pour des nonces / IV de chiffrement.
+    QRandomGenerator::system()->fillRange(
         reinterpret_cast<quint32*>(b.data()), n / 4);
     return b;
+}
+
+// Attentes bloquantes decoupees en tranches courtes : l'annulation (fermeture de
+// l'application) est ainsi prise en compte en ~100 ms au lieu d'attendre le delai plein.
+bool waitReadyReadSliced(QTcpSocket* s, int timeoutMs)
+{
+    QElapsedTimer t;
+    t.start();
+    while (!cancelFlag().load()) {
+        const int left = timeoutMs - int(t.elapsed());
+        if (left <= 0)
+            return false;
+        if (s->waitForReadyRead(qMin(100, left)))
+            return true;
+        if (s->state() != QAbstractSocket::ConnectedState)
+            return false;
+    }
+    return false;
+}
+
+bool waitConnectedSliced(QTcpSocket* s, int timeoutMs)
+{
+    QElapsedTimer t;
+    t.start();
+    while (!cancelFlag().load()) {
+        const int left = timeoutMs - int(t.elapsed());
+        if (left <= 0)
+            return false;
+        if (s->waitForConnected(qMin(100, left)))
+            return true;
+        if (s->state() == QAbstractSocket::UnconnectedState)
+            return false;
+    }
+    return false;
 }
 
 void appendBE32(QByteArray& b, quint32 v)
@@ -90,7 +128,7 @@ bool TuyaClient::readExact(QByteArray& into, int n, int timeoutMs)
             continue;
         }
         const int remaining = int(QDateTime::currentDateTime().msecsTo(deadline));
-        if (remaining <= 0 || !sock_->waitForReadyRead(remaining)) {
+        if (remaining <= 0 || !waitReadyReadSliced(sock_, remaining)) {
             error_ = QStringLiteral("delai depasse en lecture");
             return false;
         }
@@ -152,7 +190,7 @@ bool TuyaClient::connectAndNegotiate(int timeoutMs)
     close();
     sock_ = new QTcpSocket();
     sock_->connectToHost(host_, 6668);
-    if (!sock_->waitForConnected(timeoutMs)) {
+    if (!waitConnectedSliced(sock_, timeoutMs)) {
         error_ = QStringLiteral("connexion TCP 6668 impossible : ") + sock_->errorString();
         return false;
     }

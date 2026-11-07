@@ -1,5 +1,7 @@
 #include "scan/ScanOrchestrator.h"
 
+#include "core/CancelFlag.h"
+
 #include "core/IspDetect.h"
 #include "scan/ArpTable.h"
 #include "scan/PingSweep.h"
@@ -19,14 +21,20 @@ ScanOrchestrator::ScanOrchestrator(Inventory* inventory, OuiLookup* oui, QObject
 void ScanOrchestrator::run(AppSettings settings, bool incremental)
 {
     inventory_->beginScan(incremental);
+    if (cancelFlag().load())
+        return;
     emit progress(2, QStringLiteral("Interface locale"));
     const LanContext ctx = detectLanContext();
     inventory_->lanCidr = ctx.cidr;
     inventory_->log(QStringLiteral("LAN detecte : ") + ctx.cidr + " via " + ctx.interfaceName);
 
+    if (cancelFlag().load())
+        return;
     emit progress(8, QStringLiteral("Balayage ICMP (cache ARP)"));
     primeArpCache(ctx, settings.pingTimeoutMs, settings.maxParallelPings);
 
+    if (cancelFlag().load())
+        return;
     emit progress(25, QStringLiteral("Lecture table ARP"));
     for (Device d : readArpTable(ctx)) {
         d.vendor = oui_->vendor(d.mac);
@@ -34,6 +42,8 @@ void ScanOrchestrator::run(AppSettings settings, bool incremental)
         inventory_->upsert(d);
     }
 
+    if (cancelFlag().load())
+        return;
     emit progress(35, QStringLiteral("Confirmation ICMP"));
     QStringList ips;
     for (const Device& d : inventory_->devices()) {
@@ -43,18 +53,26 @@ void ScanOrchestrator::run(AppSettings settings, bool incremental)
     for (Device d : pingSweep(ips, settings.pingTimeoutMs, settings.maxParallelPings))
         inventory_->upsert(d);
 
+    if (cancelFlag().load())
+        return;
     emit progress(48, QStringLiteral("SSDP / UPnP"));
     for (Device d : ssdpDiscover(2500))
         inventory_->upsert(d);
 
+    if (cancelFlag().load())
+        return;
     emit progress(55, QStringLiteral("mDNS"));
     for (Device d : mdnsDiscover(1800))
         inventory_->upsert(d);
 
+    if (cancelFlag().load())
+        return;
     emit progress(62, QStringLiteral("NetBIOS"));
     for (Device d : netbiosDiscover(inventory_->devices(), 600))
         inventory_->upsert(d);
 
+    if (cancelFlag().load())
+        return;
     emit progress(68, QStringLiteral("API Livebox Orange"));
     QString boxIp;
     for (Device d : queryLivebox(settings, *inventory_, &boxIp)) {
@@ -64,6 +82,8 @@ void ScanOrchestrator::run(AppSettings settings, bool incremental)
         inventory_->upsert(d);
     }
 
+    if (cancelFlag().load())
+        return;
     emit progress(78, QStringLiteral("API mesh Deco X50"));
     QStringList decoCandidates;
     if (!settings.decoHost.isEmpty())
@@ -84,6 +104,8 @@ void ScanOrchestrator::run(AppSettings settings, bool incremental)
         inventory_->upsert(d);
     }
 
+    if (cancelFlag().load())
+        return;
     emit progress(85, QStringLiteral("Ports TCP"));
     {
         auto snapshot = inventory_->devices();
@@ -99,6 +121,8 @@ void ScanOrchestrator::run(AppSettings settings, bool incremental)
             inventory_->upsert(d);
     }
 
+    if (cancelFlag().load())
+        return;
     emit progress(92, QStringLiteral("Qualification HTTP morfSystem"));
     {
         auto snapshot = inventory_->devices();
@@ -121,6 +145,8 @@ void ScanOrchestrator::run(AppSettings settings, bool incremental)
                             .arg(httpMorf));
     }
 
+    if (cancelFlag().load())
+        return;
     emit progress(90, QStringLiteral("Empreinte HTTP (titre / serveur)"));
     {
         auto snapshot = inventory_->devices();
@@ -161,6 +187,8 @@ void ScanOrchestrator::run(AppSettings settings, bool incremental)
     // (24 hotes = scan colle a 94 %). Les noms viennent de Livebox, Deco, mDNS, NetBIOS.
     inventory_->log(QStringLiteral("PTR DNS omis (evite le blocage du resolveur Windows)."));
 
+    if (cancelFlag().load())
+        return;
     emit progress(100, QStringLiteral("Termine"));
     inventory_->log(QStringLiteral("Inventaire : %1 equipement(s).").arg(inventory_->devices().size()));
     emit finished();

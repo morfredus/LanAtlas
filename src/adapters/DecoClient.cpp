@@ -172,7 +172,7 @@ static QByteArray randomDigits16()
     // La web UI / ha-tplink-deco : 16 chiffres, pas de zero en tete, pas d'hex.
     const quint64 min = 1000000000000000ULL;
     const quint64 span = 9000000000000000ULL;
-    const quint64 v = min + (QRandomGenerator::global()->generate64() % span);
+    const quint64 v = min + (QRandomGenerator::system()->generate64() % span);
     return QByteArray::number(v);
 }
 

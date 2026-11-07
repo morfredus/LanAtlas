@@ -22,6 +22,33 @@ struct TuyaAnnounce {
     QDateTime lastSeen;
 };
 
+// Plafond de la table des annonces et duree de conservation : le port UDP est
+// ouvert a tout le LAN, un emetteur hostile ne doit pas pouvoir faire grossir la
+// memoire sans limite.
+constexpr int kMaxTuyaAnnounces = 512;
+constexpr int kTuyaAnnounceTtlSecs = 300;
+
+// Purge les annonces de plus de 5 minutes, puis, si la table depasse encore le
+// plafond, retire les plus anciennes. Pure : testable sans reseau.
+inline void pruneAnnounces(QHash<QString, TuyaAnnounce>& table, const QDateTime& now,
+                           int maxEntries = kMaxTuyaAnnounces)
+{
+    for (auto it = table.begin(); it != table.end();) {
+        if (it->lastSeen.secsTo(now) > kTuyaAnnounceTtlSecs)
+            it = table.erase(it);
+        else
+            ++it;
+    }
+    while (table.size() > maxEntries) {
+        auto oldest = table.begin();
+        for (auto it = table.begin(); it != table.end(); ++it) {
+            if (it->lastSeen < oldest->lastSeen)
+                oldest = it;
+        }
+        table.erase(oldest);
+    }
+}
+
 // Ecoute permanente des annonces Tuya sur le LAN. Meme esprit que BeaconListener
 // pour morfBeacon : rien a sonder, les appareils se signalent d'eux-memes. On
 // binde des l'ouverture de l'application pour avoir capte les broadcasts avant

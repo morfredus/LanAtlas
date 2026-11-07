@@ -1,4 +1,5 @@
 #include "ui/MainWindow.h"
+#include "core/CancelFlag.h"
 #include "ui/TopologyView.h"
 #include "ui/SettingsDialog.h"
 #include "ui/MorfServicesPage.h"
@@ -525,8 +526,15 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    // Annuler puis ATTENDRE vraiment : detruire un QThread encore actif est fatal
+    // (qFatal), et le scan lit inventory_ / oui_, membres detruits juste apres.
+    cancelFlag().store(true);
+    worker_.requestInterruption();
     worker_.quit();
-    worker_.wait(4000);
+    if (!worker_.wait(30000)) {
+        worker_.terminate();   // dernier recours : mieux vaut tuer le thread que planter
+        worker_.wait(2000);
+    }
 }
 
 QString MainWindow::statePath() const
@@ -574,6 +582,9 @@ void MainWindow::loadState()
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // Prevenir les travailleurs des maintenant : ils s'arretent pendant la sauvegarde.
+    cancelFlag().store(true);
+    worker_.requestInterruption();
     saveState();
     QMainWindow::closeEvent(event);
 }

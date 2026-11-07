@@ -206,7 +206,7 @@ QByteArray RsaPkcs1::encrypt(const QByteArray& modulusHex,
     for (int i = 0; i < psLen; ++i) {
         unsigned char b = 0;
         while (b == 0)
-            b = static_cast<unsigned char>(QRandomGenerator::global()->bounded(1, 256));
+            b = static_cast<unsigned char>(QRandomGenerator::system()->bounded(1, 256));
         em[2 + i] = char(b);
     }
     em[2 + psLen] = 0x00;

@@ -1,6 +1,7 @@
 #include "scan/PingSweep.h"
 #include <QProcess>
 #include <QThread>
+#include "core/CancelFlag.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -22,6 +23,8 @@ QVector<Device> pingSweep(const QStringList& ips, int timeoutMs, int maxParallel
     std::atomic<int> running{0};
     std::vector<std::thread> workers;
     for (const QString& ip : ips) {
+        if (cancelFlag().load())
+            break;
         while (running.load() >= maxParallel)
             QThread::msleep(2);
         running.fetch_add(1);

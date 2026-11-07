@@ -132,4 +132,11 @@ if(WIN32)
     endif()
 endif()
 
+# Tests natifs des fonctions pures (ctest) : uniquement QtCore, pas de reseau.
+enable_testing()
+add_executable(la_test_pure tests/test-pure.cpp)
+target_include_directories(la_test_pure PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(la_test_pure PRIVATE Qt6::Core)
+add_test(NAME la_test_pure COMMAND la_test_pure)
+
 morf_record_target_build(LanAtlas "LanAtlas")

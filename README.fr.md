@@ -2,7 +2,7 @@
 
 *Lire dans une autre langue : [English](README.md) · **Français** (ce document).*
 
-[![Version](https://img.shields.io/badge/version-0.7.20-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.7.22-blue)](CHANGELOG.md)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey)
 ![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?logo=cplusplus)
 ![Qt](https://img.shields.io/badge/Qt-6-41CD52?logo=qt)
@@ -35,7 +35,7 @@ L'onglet **Parc morfSystem** ecoute UDP 45454 et groupe les services par hote. P
 
 De la meme facon, LanAtlas ecoute en continu les **appareils Tuya** (ampoules, bandes LED, prises) qui diffusent leur presence sur le LAN (UDP 6666/6667). Ils sont etiquetes sur la carte (fabricant Tuya, objet connecte, version de protocole) sans passer par le cloud.
 
-Pour un appareil dont on sait parler, un panneau **Piloter** apparait a cote du dossier : marche/arret, luminosite, temperature de blanc et couleur. Le pilotage utilise le protocole LAN 3.5 (session chiffree AES-GCM sur TCP 6668) et demande la **local key** de l'appareil, absente du LAN : on l'obtient une fois via le cloud Tuya (assistant tinytuya) et on la colle dans le panneau. Elle est rangee dans les reglages, jamais dans le depot.
+Pour un appareil dont on sait parler, un panneau **Piloter** apparait a cote du dossier : marche/arret, luminosite, temperature de blanc et couleur. Le pilotage utilise le protocole LAN 3.5 (session chiffree AES-GCM sur TCP 6668) et demande la **local key** de l'appareil, absente du LAN : on l'obtient une fois via le cloud Tuya (assistant tinytuya) et on la colle dans le panneau. Elle est rangee dans les reglages, jamais dans le depot. Le fichier `settings.ini` (local keys et mots de passe Livebox / Deco en clair) est reserve a son proprietaire (droits 0600 sous Unix) : aucun trousseau systeme n'est utilise, pour ne pas ajouter de dependance par systeme d'exploitation.
 
 Sur la carte : filtre, ports nommes, capacites, recoupement avec les apps morfSystem du meme hote. Apres un scan, LanAtlas interroge des bases OUI (maclookup.app, macvendors.com) et ip-api pour le WAN : ce que le LAN ne dit pas.
 

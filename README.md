@@ -2,7 +2,7 @@
 
 *Read in another language: **English** (this document) · [Français](README.fr.md).*
 
-[![Version](https://img.shields.io/badge/version-0.7.20-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.7.22-blue)](CHANGELOG.md)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-lightgrey)
 ![C++](https://img.shields.io/badge/C%2B%2B-17-00599C?logo=cplusplus)
 ![Qt](https://img.shields.io/badge/Qt-6-41CD52?logo=qt)
@@ -33,7 +33,9 @@ A **"Piloter"** panel appears next to the dossier for a controllable device
 3.5 LAN protocol (AES-GCM session on TCP 6668) and needs the device's local key
 (obtained once from the Tuya cloud, then stored in the settings, never in git).
 
-Passwords stay in the user settings store (`QSettings`), never in the git tree.
+Passwords stay in the user settings store (`QSettings`), never in the git tree. The `settings.ini`
+file (Tuya local keys and Livebox / Deco passwords, in clear text) is restricted to its owner (mode 0600
+on Unix). No system keychain is used on purpose, to avoid a per-OS dependency.
 
 The first screen is a **map of what is present now** (full width). Inventory and
 history have their own tabs. Historical hosts can show on the map as dashed

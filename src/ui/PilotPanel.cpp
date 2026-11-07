@@ -1,4 +1,5 @@
 #include "ui/PilotPanel.h"
+#include "core/CancelFlag.h"
 #include "control/TuyaController.h"
 #include "control/TuyaDriver.h"
 #include "AppSettings.h"
@@ -161,8 +162,15 @@ PilotPanel::PilotPanel(QWidget* parent)
 
 PilotPanel::~PilotPanel()
 {
+    // Attente reelle (cf. MainWindow) : un ordre Tuya en cours rend la main en ~100 ms
+    // grace aux attentes decoupees de TuyaClient.
+    cancelFlag().store(true);
+    thread_.requestInterruption();
     thread_.quit();
-    thread_.wait(3000);
+    if (!thread_.wait(15000)) {
+        thread_.terminate();
+        thread_.wait(2000);
+    }
 }
 
 void PilotPanel::setDevice(const QString& host, const QString& deviceId, const QString& displayName)

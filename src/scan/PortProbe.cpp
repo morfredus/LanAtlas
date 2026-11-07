@@ -1,6 +1,7 @@
 #include "scan/PortProbe.h"
 #include "core/Device.h"
 #include "core/NetHints.h"
+#include "core/CancelFlag.h"
 
 #include <QTcpSocket>
 #include <QThread>
@@ -65,6 +66,8 @@ void probePorts(QVector<Device>& devices, int timeoutMs, bool deep,
     const int portWorkers = qBound(4, nPorts, 12);
 
     for (Device& d : devices) {
+        if (cancelFlag().load())
+            break;
         if (skipIp(d.ip) || liveboxSaysAbsent(d))
             continue;
 
@@ -73,7 +76,7 @@ void probePorts(QVector<Device>& devices, int timeoutMs, bool deep,
         auto worker = [&]() {
             while (true) {
                 const int i = next.fetch_add(1);
-                if (i >= nPorts)
+                if (i >= nPorts || cancelFlag().load())
                     break;
                 const int port = ports[i];
                 if (!tryTcp(d.ip, quint16(port), timeoutMs))

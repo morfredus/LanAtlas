@@ -6,6 +6,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QThread>
+#include "core/CancelFlag.h"
 #include <QtEndian>
 #include <atomic>
 #include <thread>
@@ -90,7 +91,7 @@ void primeArpCache(const LanContext& ctx, int timeoutMs, int maxParallel)
     std::atomic<int> running{0};
     std::vector<std::thread> workers;
     workers.reserve(size_t(qMax(1, int(ctx.lastHost - ctx.firstHost + 1))));
-    for (quint32 h = ctx.firstHost; h <= ctx.lastHost; ++h) {
+    for (quint32 h = ctx.firstHost; h <= ctx.lastHost && !cancelFlag().load(); ++h) {
         while (running.load() >= maxParallel)
             QThread::msleep(2);
         running.fetch_add(1);

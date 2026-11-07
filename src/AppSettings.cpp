@@ -59,11 +59,29 @@ bool ensureMigrated()
 }
 } // namespace
 
+// Le fichier contient des secrets en clair (local keys Tuya, mots de passe Livebox
+// et Deco) : le reserver a son proprietaire. Choix assume : pas de trousseau systeme
+// (dependance lourde, differente par OS) ; les droits 0600 suffisent sur une machine
+// mono-utilisateur. Sous Windows, le profil utilisateur protege deja le dossier.
+static void restrictSettingsFile()
+{
+#ifndef Q_OS_WIN
+    QFile::setPermissions(settingsFilePath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
+}
+
 QSettings AppSettings::store()
 {
     // Une seule fois par processus : recuperer les anciens reglages si besoin.
     static const bool migrated = ensureMigrated();
     Q_UNUSED(migrated);
+    // QSettings ne cree le fichier qu'a l'ecriture : le creer vide d'abord pour
+    // pouvoir lui poser ses droits avant que des secrets y soient ecrits.
+    if (!QFile::exists(settingsFilePath())) {
+        QFile f(settingsFilePath());
+        f.open(QIODevice::WriteOnly | QIODevice::Append);
+    }
+    restrictSettingsFile();
     return QSettings(settingsFilePath(), QSettings::IniFormat);
 }
 
