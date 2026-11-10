@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0] - 2026-11-10
+
+### Added
+
+- **Windows installer** (`LanAtlas-<version>-win64-setup.exe`, Inno Setup 6, English and French): per-user install by default (no administrator rights), Start menu entry, optional desktop shortcut, uninstaller. User data is kept on uninstall unless the question is answered with Yes. The ZIP is still published. New `windows-x86_64-installer` target in `morfproject.json`.
+- `.github/FUNDING.yml` (GitHub Sponsors button).
+
+## [0.7.24] - 2026-11-10
+
+### Changed
+
+- Vendored morfUpdate resynchronised to 0.9.2: on Windows the update dialog now offers the installer (`*-setup.exe`) before the portable ZIP.
+
 ## [0.7.23] - 2026-11-10
 
 ### Changed
