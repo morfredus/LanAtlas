@@ -96,7 +96,9 @@ if(WIN32)
         HINTS "${Qt6_DIR}/../../../bin" "$ENV{QT_ROOT}/bin")
     if(WINDEPLOYQT_EXE)
         add_custom_command(TARGET LanAtlas POST_BUILD
-            COMMAND "${WINDEPLOYQT_EXE}" --no-translations --compiler-runtime "$<TARGET_FILE:LanAtlas>"
+            # --force : sans lui, windeployqt garde une DLL deja presente dont la date est plus recente,
+            # meme si elle vient d'un autre environnement MSYS2 (mingw64 / ucrt64) que le compilateur.
+            COMMAND "${WINDEPLOYQT_EXE}" --no-translations --compiler-runtime --force "$<TARGET_FILE:LanAtlas>"
             COMMENT "Deploiement des DLL Qt a cote de l'executable")
     endif()
     if(NOT MSVC)
@@ -115,6 +117,7 @@ if(WIN32)
             find_program(_lanatlas_cxx NAMES "${CMAKE_CXX_COMPILER}" g++.exe)
         endif()
         get_filename_component(LANATLAS_COMPILER_BIN "${_lanatlas_cxx}" DIRECTORY)
+        lanatlas_msys_path("${LANATLAS_COMPILER_BIN}" LANATLAS_TOOLCHAIN_BIN)
         get_filename_component(LANATLAS_MINGW_ROOT "${LANATLAS_COMPILER_BIN}" DIRECTORY)
         get_filename_component(LANATLAS_MSYS_ROOT "${LANATLAS_MINGW_ROOT}" DIRECTORY)
         find_program(LANATLAS_MSYS_BASH bash.exe
@@ -125,7 +128,7 @@ if(WIN32)
                 COMMAND "${CMAKE_COMMAND}" -E env
                     "PATH=${LANATLAS_MSYS_ROOT}/usr/bin;${LANATLAS_COMPILER_BIN}"
                     --
-                    "${LANATLAS_MSYS_BASH}" "${LANATLAS_DEPLOY_SCRIPT}" "${LANATLAS_TARGET_DIR}"
+                    "${LANATLAS_MSYS_BASH}" "${LANATLAS_DEPLOY_SCRIPT}" "${LANATLAS_TARGET_DIR}" "${LANATLAS_TOOLCHAIN_BIN}"
                 VERBATIM
                 COMMENT "Copie des DLL MinGW a cote de l'executable")
         endif()
