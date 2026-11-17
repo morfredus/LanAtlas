@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.1] - 2026-11-17
+
+### Changed
+
+- Vendored morfDeploy resynchronised to 0.22.0: on Windows, the build libraries are recognised under MSYS2 (UCRT64) and verified with pacman instead of reported as "no package for this platform".
+- Vendored morfUpdate resynchronised to 0.9.3 (no behaviour change).
+- Windows build: `deploy-mingw.sh` copies the DLLs from `/ucrt64/bin` (MSYS2 `UCRT64` replaces the deprecated `MINGW64`; `/mingw64/bin` is still accepted).
+
+### Fixed
+
+- Creating the settings file no longer ignores a failure of `QFile::open` (compiler warning `-Wunused-result`): a failure is now logged.
+
 ## [0.8.0] - 2026-11-10
 
 ### Added

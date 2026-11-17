@@ -79,7 +79,10 @@ QSettings AppSettings::store()
     // pouvoir lui poser ses droits avant que des secrets y soient ecrits.
     if (!QFile::exists(settingsFilePath())) {
         QFile f(settingsFilePath());
-        f.open(QIODevice::WriteOnly | QIODevice::Append);
+        // open() est [[nodiscard]] : un echec est signale plutot qu'ignore en silence.
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Append))
+            qWarning("AppSettings : creation du fichier de reglages impossible : %s",
+                     qPrintable(f.errorString()));
     }
     restrictSettingsFile();
     return QSettings(settingsFilePath(), QSettings::IniFormat);
