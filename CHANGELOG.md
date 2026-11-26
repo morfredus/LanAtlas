@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.9.1] - 2026-11-26
+
+### Fixed
+
+- Vendored morfUpdate resynchronised to 0.10.1 (version file only; no behaviour change).
+
 ## [0.9.0] - 2026-11-26
 
 ### Added
